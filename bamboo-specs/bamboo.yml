@@ -701,11 +701,6 @@ branches:
   link-to-jira: true
 notifications:
 - events:
-  - plan-completed
-  recipients:
-  - microsoft-teams:
-      recipientString: ${bamboo.teamssitecoreWebhookSecret}|CICD-Sitecore|true|
-- events:
   - plan-failed
   recipients:
   - responsible
