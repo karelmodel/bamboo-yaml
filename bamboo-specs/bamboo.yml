@@ -567,21 +567,15 @@ Deploy to CD2:
     destination: deploy
   - artifact: Sitecore Storybook nuget
     destination: deploy
-repositories: []
+repositories:
+- yaml:
+    scope: global
 triggers: []
 branches:
-  create:
-    for-new-branch: release/.*|hotfix/.*|bugfix/.*|feature/.*|develop
-  delete:
-    after-deleted-days: 14
-    after-inactive-days: never
+  create: manually
+  delete: never
   link-to-jira: true
-notifications:
-- events:
-  - plan-failed
-  recipients:
-  - responsible
-  - committers
+notifications: []
 labels: []
 dependencies:
   require-all-stages-passing: false
