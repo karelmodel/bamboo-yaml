@@ -567,13 +567,8 @@ Deploy to CD2:
     destination: deploy
   - artifact: Sitecore Storybook nuget
     destination: deploy
-repositories:
-triggers:
-- polling:
-    period: '300'
-    description: Poll remote
-    repositories:
-    - Sitecore
+repositories: []
+triggers: []
 branches:
   create:
     for-new-branch: release/.*|hotfix/.*|bugfix/.*|feature/.*|develop
