@@ -1,0 +1,727 @@
+---
+version: 2
+plan:
+  project-key: STC
+  key: STC2
+  name: SC_CICD_TRACK2
+  description: Sitecore Pipeline Track 2
+stages:
+- Build and Package:
+    manual: false
+    final: false
+    jobs:
+    - Build
+- Deploy to DEV:
+    manual: false
+    final: false
+    jobs:
+    - Deploy to DEV
+- Deploy to QA:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to QA
+- Deploy to UAT CM:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to UAT CM
+- Deploy to UAT CD1:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to UAT CD1
+- Deploy to UAT CD2:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to UAT CD2
+- Deploy to Prod CM:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to CM
+- Deploy to Prod CD1:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to CD1
+- Deploy to Prod CD2:
+    manual: true
+    final: false
+    jobs:
+    - Deploy to CD2
+Build:
+  key: JOB1
+  tasks:
+  - clean
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout Scripts
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: FILE
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psFile: devops/sitecore-preflight.ps1
+      description: Pre-flight script
+  - inject-variables:
+      file: inject.config
+      scope: RESULT
+      namespace: inject
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            planRepository.branchName: master
+      description: Stop if branch is Master
+  - any-task:
+      plugin-key: ch.mibex.bamboo.sonar4bamboo:sonar4bamboo.msbuildbegintask
+      configuration:
+        chosenSonarConfigId: '1'
+        sonarServerSelection: fromServerConfig
+        sonarMainBranch: master
+        sonarProjectName: medprositecore
+        sonarPullRequestAnalysis: 'true'
+        overrideSonarLoginVariable: ANYPOINT_PASSWORD
+        incrementalNoPullRequest: incrementalModeFailBuildField
+        executable: SonarScanMSBuild
+        illegalBranchCharsReplacement: '-'
+        sonarEditionSelection: COMMERCIAL_EDITION
+        failBuildForTaskErrors: 'true'
+        incrementalModeNotPossible: incrementalModeRunFullAnalysis
+        additionalProperties: /d:sonar.login=${bamboo.sonarProdTokenPassword}
+        autoBranch: 'true'
+        sonarProjectKey: STC:medprositecore
+      description: Build Sonar Analysis
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugin.dotnet:msbuild
+      configuration:
+        solution: ${bamboo.build.working.directory}/Sitecore/MedProSC.sln
+        options: /nologo /p:TargetFrameworkVersion=${bamboo.TargetFrameworkVersion} /p:RestorePackagesConfig=true /p:Configuration=Release  /t:Clean,Build -restore /p:RestoreSources=https://nexus.medpro.com/nexus/repository/nuget.org-proxy/index.json
+        label: msbuild CLI
+  - any-task:
+      plugin-key: ch.mibex.bamboo.sonar4bamboo:sonar4bamboo.msbuildendtask
+      configuration:
+        chosenSonarConfigId: '1'
+        sonarServerSelection: fromServerConfig
+        sonarMainBranch: master
+        buildJdk: JDK 17
+        sonarPullRequestAnalysis: 'true'
+        overrideSonarLoginVariable: ANYPOINT_PASSWORD
+        incrementalNoPullRequest: incrementalModeFailBuildField
+        executable: SonarScanMSBuild
+        illegalBranchCharsReplacement: '-'
+        sonarEditionSelection: COMMERCIAL_EDITION
+        failBuildForTaskErrors: 'true'
+        incrementalModeNotPossible: incrementalModeRunFullAnalysis
+        autoBranch: 'true'
+      description: End Sonar Analysis
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/Sonar/set_pr_decoration.py "-uSVC_ProdSonarQube" "-p${bamboo.sonarServerPRODPassword}" "-jSTC:medprositecore" "-rSTC" "-smedprositecore" "-ePROD"
+      description: PR Decoration
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: BODY
+        psBody: |
+          write-host "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+          write-host "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Build-StoryBook=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+          write-host "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+          write-host "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-NPM Install=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+          npm install
+          write-host "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Build-Storybook=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+          npm run build-storybook
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psSubdirectory: Sitecore/src/Theme/MedProDotCom
+      description: Build Storybook
+  - command:
+      executable: nuget CLI
+      argument: pack nuget.nuspec -ExcludeEmptyDirectories -NonInteractive -Properties "MedProSitecore=${bamboo.build.working.directory}\Sitecore;NoWarn=NU5100,NU5119" ${bamboo.inject.nuget_extra_args}
+      working-dir: Sitecore/nuget
+      description: Sitecore Code Nuget Pack
+  - command:
+      executable: nuget CLI
+      argument: pack Storybook.nuspec -ExcludeEmptyDirectories -NonInteractive -Properties "MedProSitecore=${bamboo.build.working.directory}\Sitecore;NoWarn=NU5100,NU5119" ${bamboo.inject.nuget_extra_args}
+      working-dir: Sitecore/nuget/storybook
+      description: Storybook nuget
+  - command:
+      executable: nuget CLI
+      argument: pack Serialization.nuspec -ExcludeEmptyDirectories -NonInteractive -Properties "MedProSitecore=${bamboo.build.working.directory}\Sitecore;NoWarn=NU5100,NU5119" ${bamboo.inject.nuget_extra_args}
+      working-dir: Sitecore/nuget/serialization
+      description: Serialization Nuget Pack
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-artifactory-delete-repo-files --url ${bamboo.tower_url} --wait_for_job true
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload_art_del} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      conditions:
+      - variable:
+          matches:
+            delete_prior_release: (?i)true
+      description: Delete Artifactory nuget release
+  - any-task:
+      plugin-key: org.jfrog.bamboo.bamboo-artifactory-plugin:artifactoryNugetTask
+      configuration: {}
+      description: Nuget push build artifacts
+  - any-task:
+      plugin-key: org.jfrog.bamboo.bamboo-artifactory-plugin:artifactoryPublishBuildInfoTask
+      configuration: {}
+      description: Publish Build info
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  artifacts:
+  - name: Sitecore Code Nuget
+    location: Sitecore/nuget
+    pattern: '*.nupkg'
+    shared: true
+    required: true
+  - name: Sitecore Serialization Nuget
+    location: Sitecore/nuget/serialization
+    pattern: '*.nupkg'
+    shared: true
+    required: false
+  - name: Sitecore Storybook nuget
+    location: Sitecore/nuget/storybook
+    pattern: '*.nupkg'
+    shared: true
+    required: false
+  requirements:
+  - system.builder.command.msbuild CLI
+  - OS: Windows
+  artifact-subscriptions: []
+Deploy to DEV:
+  key: DEV
+  tasks:
+  - clean
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^release.*$
+      description: Stop deploy if branch is release*
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: BODY
+        psBody: "write-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Serialization=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Restore=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet tool restore\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-new-tool=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet new tool-manifest\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Install & Login=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet nuget list source \ndotnet tool install Sitecore.CLI --add-source https://nexus.medpro.com/nexus/repository/Sitecore_MyGet_Nuget_Proxy/index.json\ndotnet sitecore init \ndotnet sitecore login --authority ${bamboo.T2_DEV_serialization_authority} --cm ${bamboo.T2_DEV_serialization_cm} --allow-write true --client-credentials true --client-id ${bamboo.T2_DEV_serialization_clientid} --client-secret ${bamboo.T2_DEV_serialization_secret}\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Push=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore ser push \ndotnet sitecore ser validate --fix\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Publish=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore publish \nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\n"
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psSubdirectory: Sitecore
+      description: Serialization
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.T2_DEV_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.T2_DEV_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to QA:
+  key: QA
+  tasks:
+  - clean
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^release.*$
+      description: Stop deploy if branch is release*
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: BODY
+        psBody: "write-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Serialization=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Restore=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet tool restore\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-new-tool=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet new tool-manifest\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Install & Login=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet nuget list source \ndotnet tool install Sitecore.CLI --add-source https://nexus.medpro.com/nexus/repository/Sitecore_MyGet_Nuget_Proxy/index.json\ndotnet sitecore init \ndotnet sitecore login --authority ${bamboo.T2_QA_serialization_authority} --cm ${bamboo.T2_QA_serialization_cm} --allow-write true --client-credentials true --client-id ${bamboo.T2_QA_serialization_clientid} --client-secret ${bamboo.T2_QA_serialization_secret}\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Push=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore ser push \ndotnet sitecore ser validate --fix\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Publish=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore publish \nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\n"
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psSubdirectory: Sitecore
+      description: Serialization
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.T2_QA_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.T2_QA_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to UAT CM:
+  key: UAT
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^release.*$
+      description: Stop deploy if branch is release*
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: BODY
+        psBody: "write-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Serialization=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Restore=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet tool restore\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-new-tool=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet new tool-manifest\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Install & Login=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet nuget list source \ndotnet tool install Sitecore.CLI --add-source https://nexus.medpro.com/nexus/repository/Sitecore_MyGet_Nuget_Proxy/index.json\ndotnet sitecore init \ndotnet sitecore login --authority ${bamboo.T2_UAT_CM_serialization_authority} --cm ${bamboo.T2_UAT_CM_serialization_cm} --allow-write true --client-credentials true --client-id ${bamboo.T2_UAT_CM_serialization_clientid} --client-secret ${bamboo.T2_UAT_CM_serialization_secret}\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Push=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore ser push \ndotnet sitecore ser validate --fix\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Publish=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore publish \nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\n"
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psSubdirectory: Sitecore
+      description: Serialization
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.T2_UAT_CM_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.T2_UAT_CM_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to UAT CD1:
+  key: CD1
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^release.*$
+      description: Stop deploy if branch is release*
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.T2_UAT_CD_1_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.T2_UAT_CD1_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to UAT CD2:
+  key: CD2
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^release.*$
+      description: Stop deploy if branch is release*
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.T2_UAT_CD_2_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.T2_UAT_CD2_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to CM:
+  key: DCM
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^((?!release).)*$
+      description: Only allow Release branches to production
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - any-task:
+      plugin-key: com.stellarity.bamboo.powershell-task:powerShellTask
+      configuration:
+        psLocation: BODY
+        psBody: "write-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Serialization=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Restore=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet tool restore\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-new-tool=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet new tool-manifest\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Install & Login=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet nuget list source \ndotnet tool install Sitecore.CLI --add-source https://nexus.medpro.com/nexus/repository/Sitecore_MyGet_Nuget_Proxy/index.json\ndotnet sitecore init \ndotnet sitecore login --authority ${bamboo.PROD_CM_serialization_authority} --cm ${bamboo.PROD_CM_serialization_cm} --allow-write true --client-credentials true --client-id ${bamboo.PROD_CM_serialization_clientid} --client-secret ${bamboo.PROD_CM_serialization_secret}\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Push=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore ser push \ndotnet sitecore ser validate --fix\nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-Publish=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\"\ndotnet sitecore publish \nwrite-host \"=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\"\n"
+        psLoadProfile: DEFAULT
+        psBitness: ANY
+        psSubdirectory: Sitecore
+      description: Serialization
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.PROD_CM_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.PROD_CM_Deploy_Env}
+      description: Ansible Deploy script
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to CD1:
+  key: DC1
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^((?!release).)*$
+      description: Only allow Release branches to production
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.PROD_CD_1_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.PROD_CD1_Deploy_Env}
+      description: Ansible Deploy script
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+Deploy to CD2:
+  key: DC2
+  tasks:
+  - clean
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/audits/bamboo_validate_user.py  --username ${bamboo.ad_auth_name} --userpassword "${bamboo.ad_auth_password}" --aduser ${bamboo.ManualBuildTriggerReason.userName} --adgroup ${bamboo.ad_deploy_check_group}
+      description: Validate User has access to deploy
+  - checkout:
+      repository: Sitecore
+      path: Sitecore
+      force-clean-build: false
+      description: Checkout Sitecore repo
+  - checkout:
+      repository: DevOps-Sitecore
+      path: devops
+      force-clean-build: false
+      description: Checkout DevOp Scripts
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          equals:
+            bamboo.inject.stop_deploy: 'true'
+      description: Stop build based on pre-flight script
+  - stop-job:
+      success: 'true'
+      conditions:
+      - variable:
+          matches:
+            planRepository.branchName: ^((?!release).)*$
+      description: Only allow Release branches to production
+  - any-task:
+      plugin-key: com.atlassian.bamboo.plugins.bamboo-variable-inject-plugin:dump
+      configuration: {}
+  - command:
+      executable: Ansible_Playbook
+      argument: devops/Ansible/init_deploy.yml  --limit=${bamboo.PROD_CD_2_Server}, -i devops/Ansible/inventory --extra-vars "ansible_password=${bamboo.ansible_password}" --extra-vars "tower_token=${bamboo.AnsibleAPITokenSecret}"
+      environment: bamboo_deploy_env=${bamboo.PROD_CD2_Deploy_Env}
+      description: Ansible Deploy script
+  final-tasks:
+  - command:
+      executable: Python_3
+      argument: ${bamboo.capability.WorkPath}/tower/tower_launch.py --template devops-bamboo_trigger_plan --url ${bamboo.tower_url}
+      environment: TOWER_PAYLOAD=${bamboo.tower_api_payload} TOWER_API_TOKEN=${bamboo.AnsibleAPITokenSecret}
+      description: Launch metrics plan via Tower
+  requirements:
+  - OS: Linux
+  artifact-subscriptions:
+  - artifact: Sitecore Code Nuget
+    destination: deploy
+  - artifact: Sitecore Storybook nuget
+    destination: deploy
+repositories:
+- Sitecore:
+    type: git
+    url: ssh://git@bitbucket.medpro.com/stc/medprositecore.git
+    branch: master
+    ssh-key: BAMSCRT@0@0@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
+    ssh-key-passphrase: BAMSCRT@0@0@9hhO1OPtYuolgmWtRzMxiw==
+    command-timeout-minutes: '180'
+    lfs: false
+    verbose-logs: false
+    use-shallow-clones: false
+    cache-on-agents: false
+    submodules: false
+    ssh-key-applies-to-submodules: false
+    fetch-all: true
+- DevOps-Sitecore:
+    type: git
+    url: ssh://git@bitbucket.medpro.com/devops/bamboo-sitecore.git
+    branch: master
+    ssh-key: BAMSCRT@0@0@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
+    ssh-key-passphrase: BAMSCRT@0@0@9hhO1OPtYuolgmWtRzMxiw==
+    command-timeout-minutes: '180'
+    lfs: false
+    verbose-logs: false
+    use-shallow-clones: false
+    cache-on-agents: false
+    submodules: false
+    ssh-key-applies-to-submodules: false
+    fetch-all: true
+triggers:
+- polling:
+    period: '300'
+    description: Poll remote
+    repositories:
+    - Sitecore
+branches:
+  create:
+    for-new-branch: release/.*|hotfix/.*|bugfix/.*|feature/.*|develop
+  delete:
+    after-deleted-days: 14
+    after-inactive-days: never
+  link-to-jira: true
+notifications:
+- events:
+  - plan-completed
+  recipients:
+  - microsoft-teams:
+      recipientString: ${bamboo.teamssitecoreWebhookSecret}|CICD-Sitecore|true|
+- events:
+  - plan-failed
+  recipients:
+  - responsible
+  - committers
+labels: []
+dependencies:
+  require-all-stages-passing: false
+  enabled-for-branches: true
+  block-strategy: none
+  plans: []
+other:
+  concurrent-build-plugin: system-default
+  force-stop-build: true
+---
+version: 2
+plan:
+  key: STC-STC2
+plan-permissions: []
+...
