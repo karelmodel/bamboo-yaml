@@ -12,7 +12,7 @@ stages:
     jobs:
     - Build
 - Deploy to DEV:
-    manual: false
+    manual: true
     final: false
     jobs:
     - Deploy to DEV
